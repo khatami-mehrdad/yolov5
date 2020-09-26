@@ -15,7 +15,7 @@ class ImportanceHook():
         return torch.flatten( self.get_importance() ) 
 
     def compute_mask(self, thr_val : float):
-        return torch.ge(self.get_importance(), thr_val)         
+        return torch.ge(self.get_importance(), thr_val).to(torch.int8)       
 
     def apply_sparsity(self, sparsity : float):
         thr = self.compute_importance_thr(sparsity)
