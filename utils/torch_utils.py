@@ -9,7 +9,7 @@ import torch.backends.cudnn as cudnn
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
-import np
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
