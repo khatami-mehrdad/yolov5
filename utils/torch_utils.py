@@ -9,20 +9,25 @@ import torch.backends.cudnn as cudnn
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
+import np
 
 logger = logging.getLogger(__name__)
 
 
 def init_seeds(seed=0):
+
+    np.random.seed(seed)
     torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
 
     # Speed-reproducibility tradeoff https://pytorch.org/docs/stable/notes/randomness.html
-    if seed == 0:  # slower, more reproducible
-        cudnn.deterministic = True
-        cudnn.benchmark = False
-    else:  # faster, less reproducible
-        cudnn.deterministic = False
-        cudnn.benchmark = True
+    # if seed == 0:  # slower, more reproducible
+    #     cudnn.deterministic = True
+    #     cudnn.benchmark = False
+    # else:  # faster, less reproducible
+    #     cudnn.deterministic = False
+    #     cudnn.benchmark = True
 
 
 def select_device(device='', batch_size=None):

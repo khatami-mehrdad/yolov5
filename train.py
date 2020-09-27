@@ -56,7 +56,7 @@ def train(hyp, opt, device, tb_writer=None):
 
     # Configure
     cuda = device.type != 'cpu'
-    init_seeds(2 + rank)
+    init_seeds(opt.seed + rank)
     with open(opt.data) as f:
         data_dict = yaml.load(f, Loader=yaml.FullLoader)  # data dict
     with torch_distributed_zero_first(rank):
@@ -431,6 +431,8 @@ if __name__ == '__main__':
     parser.add_argument('--logdir', type=str, default='runs/', help='logging directory')
     parser.add_argument('--workers', type=int, default=8, help='maximum number of dataloader workers')
     parser.add_argument('--prune', action='store_true', help='use pruning')
+    parser.add_argument('--seed', type=int, default=42, metavar='S', help='random seed (default: 42)')    
+    
     opt = parser.parse_args()
 
     # Set DDP variables
