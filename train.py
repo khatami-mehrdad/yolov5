@@ -431,7 +431,7 @@ if __name__ == '__main__':
     parser.add_argument('--logdir', type=str, default='runs/', help='logging directory')
     parser.add_argument('--workers', type=int, default=8, help='maximum number of dataloader workers')
     parser.add_argument('--prune', action='store_true', help='use pruning')
-    parser.add_argument('--seed', type=int, default=42, metavar='S', help='random seed (default: 42)')    
+    parser.add_argument('--seed', type=int, default=2, metavar='S', help='random seed (default: 2: yolov5 repo)')    
     
     opt = parser.parse_args()
 
