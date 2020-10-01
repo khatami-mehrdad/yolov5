@@ -59,11 +59,16 @@ def create_pruner(pruner_property):
     return cls_(pruner_property)
 #############################################
 ## Applying Sparsity
-def apply_pruning_step(epoch: int, pruners: dict, hooks: dict):
+def apply_pruning_step(epoch: float, pruners: dict, hooks: dict):
     for pruner in pruners.values():
-        curr_sparsity = pruner.step_all(epoch)
-        for name, sparsity in curr_sparsity.items():
-            hooks[name].apply_sparsity(1 - sparsity)
+        curr_sparsity, curr_grow = pruner.step_all(epoch)
+        if ( (pruner.stage_cnt >= 0) and (pruner.stage_cnt <= pruner.num_stages) ):
+            for name, sparsity in curr_sparsity.items():
+                if (sparsity > 0):
+                    hooks[name].apply_sparsity( sparsity )
+                if (curr_grow[name] > 0):
+                    hooks[name].apply_growth( curr_grow[name] )
+
 
 #############################################
 ## Computing Imortance & Applying Sparsity mask
@@ -111,7 +116,7 @@ def get_sparsity_stat(model : nn.Module, parent_name : str = ''):
     for child_name, child in model.named_children():
         module_name = get_prefix(parent_name) + child_name
         if isinstance(child, PrunableModule):
-            sparsity_dict[module_name] = torch.sum(child.mask).item() / child.mask.numel()
+            sparsity_dict[module_name] = 1 - ( torch.sum(child.mask).item() / child.mask.numel() )
         else:
             sparsity_dict.update( get_sparsity_stat(child, module_name) )
     return sparsity_dict

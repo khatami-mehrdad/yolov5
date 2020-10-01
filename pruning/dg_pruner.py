@@ -23,7 +23,11 @@ class DG_Pruner():
         for h in self.hooks.values():
             h.reset_importance()
 
-    def apply_pruning_step(self, epoch: int):
+    def reset_growth(self):
+        for h in self.hooks.values():
+            h.reset_growth()
+
+    def apply_pruning_step(self, epoch: float):
         prn.apply_pruning_step(epoch, self.pruners, self.hooks)
 
     def dump_importance_stat(self, output_dir : str = '', epoch : int = 0):
@@ -39,3 +43,11 @@ class DG_Pruner():
 
     def compute_sparsity_table_from_layer(self, layer_name : str, sparsity : float):
         return prn.compute_sparsity_table_from_layer(self.hooks, layer_name, sparsity)
+
+    def prune_n_reset(self, epoch : float):
+        self.apply_pruning_step(epoch)
+        self.reset_importance()        
+        self.reset_growth()
+
+    def num_iter_per_update(self, num_batch_per_epoch : int) -> int:
+        return round( self.pruners[list(self.pruners)[0]].opt['frequency'] * num_batch_per_epoch )

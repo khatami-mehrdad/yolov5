@@ -13,18 +13,15 @@ class FakePrune(torch.autograd.Function):
     @staticmethod
     def forward(ctx, weight, mask):
         ctx.save_for_backward(weight, mask)
-        return mask * weight
+        return mask * weight        # mask is only applied in forward
     
     @staticmethod
     def backward(ctx, grad_output):
         weight, mask = ctx.saved_tensors
         grad_weight = grad_mask = None
         
-        print(grad_output.shape)
-        print(mask.shape)
-
         if ctx.needs_input_grad[0]:
-            grad_weight = grad_output * mask
+            grad_weight = grad_output   # no change for the weight grad: to observe grads even for the masked weights
         if ctx.needs_input_grad[1]:
             grad_mask = grad_output * weight
 
@@ -41,10 +38,14 @@ class PrunableModule(nn.Module):
             raise ValueError('Prunable Module of {} is not allowed'.type(org_module))
 
         self.org_module = org_module
-        self.register_buffer('mask', torch.ones_like(self.org_module.weight, dtype=torch.int8))
+        self.register_buffer('mask', torch.ones_like(self.org_module.weight, dtype=torch.int8)) # bool has issues in AMP
 
     def set_mask(self, new_mask):
         self.mask = new_mask
+
+    def or_mask(self, new_mask):
+        self.mask += new_mask
+        self.mask[self.mask > 1] = 1
 
     def forward(self, input):
         pass

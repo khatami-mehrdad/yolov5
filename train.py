@@ -31,7 +31,7 @@ from utils.google_utils import attempt_download
 from utils.torch_utils import init_seeds, ModelEMA, select_device, intersect_dicts
 
 # Mehrdad
-from pruning import DG_Pruner, TaylorImportance, MagnitudeImportance
+from pruning import DG_Pruner, TaylorImportance, MagnitudeImportance, RigLImportance
 #
 
 logger = logging.getLogger(__name__)
@@ -88,8 +88,8 @@ def train(hyp, opt, device, tb_writer=None):
         dgPruner = DG_Pruner()
         model = dgPruner.swap_prunable_modules(model)
         dgPruner.dump_sparsity_stat(model, log_dir, 0)
-        pruners = dgPruner.pruners_from_file('pruning/agp_yolov5m.json')
-        hooks = dgPruner.add_custom_pruning(model, MagnitudeImportance)
+        pruners = dgPruner.pruners_from_file('pruning/rigl_yolov5m.json')
+        hooks = dgPruner.add_custom_pruning(model, RigLImportance)
     #
 
     # Freeze
@@ -226,17 +226,6 @@ def train(hyp, opt, device, tb_writer=None):
     for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
         model.train()
 
-        # # Mehrdad
-        if opt.prune:
-            # After epoch train
-            # if (epoch != start_epoch):  # MagnitudeImportance OK
-            dgPruner.dump_importance_stat(log_dir, epoch)
-            dgPruner.apply_pruning_step(epoch)
-            # Before each epoch
-            dgPruner.dump_sparsity_stat(model, log_dir, epoch)
-            dgPruner.reset_importance()
-        # # 
-
         # Update image weights (optional)
         if opt.image_weights:
             # Generate indices
@@ -320,8 +309,9 @@ def train(hyp, opt, device, tb_writer=None):
                         tb_writer.add_image(f, result, dataformats='HWC', global_step=epoch)
                         # tb_writer.add_graph(model, imgs)  # add model to tensorboard
             # Mehrdad
-            if ( opt.prune and (i % 20 == 0) ):
-                dgPruner.dump_importance_stat(log_dir, epoch)
+            if ( opt.prune and ( (i % dgPruner.num_iter_per_update(nb) ) == 0) ):
+                dgPruner.prune_n_reset( epoch + i / nb )
+                dgPruner.dump_sparsity_stat(model, log_dir, epoch)
             # end batch ------------------------------------------------------------------------------------------------
 
         # Scheduler

@@ -1,50 +1,57 @@
 
 import math
 
-class PrunerBase():
-    def __init__(self, vars : dict):
-        self.init(vars['starting_epoch'], vars['frequency'], vars['ending_epoch'], vars['weights'])
+def pruner_factory(classname):
+    cls = globals()[classname]
+    return cls
 
-    def init(self, starting_epoch: int, frequency: int, ending_epoch: int, weight_dict: dict):
-        self.starting_epoch = starting_epoch
-        self.ending_epoch = ending_epoch
-        self.frequency = frequency
-        self.num_stages = (self.ending_epoch - self.starting_epoch) // self.frequency + 1        
-        self.weight_dict = weight_dict
-        self.curr_sparsity = {key:0.0 for key in self.weight_dict.keys()}
+class PrunerBase():
+    def __init__(self, opt : dict):
+        self.opt = opt
+        self.num_stages = (opt['ending_epoch'] - opt['starting_epoch']) // opt['frequency']        
+        self.curr_sparsity = {key:0.0 for key in opt['weights'].keys()}
+        self.curr_grow = {key:0.0 for key in opt['weights'].keys()}
         self.stage_cnt = 0
 
-    def compute_stage_cnt(self, epoch):
-        self.stage_cnt = 1 + (epoch - self.starting_epoch) // self.frequency
-        if (self.stage_cnt < 0):
-            self.stage_cnt = 0
-        elif (self.stage_cnt > self.num_stages):
-            self.stage_cnt = self.num_stages
+    def compute_stage_cnt(self, epoch : float):
+        self.stage_cnt = (epoch - self.opt['starting_epoch']) // self.opt['frequency']
 
-    def step(self, final_sparsity: float):
-        pass
+    def prune_step(self, final_sparsity: float):
+        return 0
 
-    def get_curr_spasity(self):
-        return self.curr_sparsity
+    def grow_step(self, initial_grow: float):
+        return 0
 
-    def step_all(self, epoch: int):
+    def step_all(self, epoch: float):
         self.compute_stage_cnt(epoch)
-        for layer_name, final_sparsity in self.weight_dict.items():
-            self.curr_sparsity[layer_name] = self.step(final_sparsity)
-        return self.curr_sparsity
+        if (self.stage_cnt >= 0 and self.stage_cnt <= self.num_stages):
+            for layer_name, final_sparsity in self.opt['weights'].items():
+                self.curr_sparsity[layer_name] = self.prune_step(final_sparsity)
+                self.curr_grow[layer_name] = self.grow_step()
+        return self.curr_sparsity, self.curr_grow
 
 class AGP(PrunerBase):
     r"""
     sparsity_val = end - (end - start) * ( 1 - (n / num_stages) )^3 )
     """
-    def __init__(self, vars : dict):
-        super().__init__(vars)
-        self.T = vars['T'] if 'T' in vars.keys() else 3
+    def __init__(self, opt : dict):
+        super().__init__(opt)
 
-    def step(self, final_sparsity: float):
-        val =  final_sparsity - (final_sparsity - 1.0) * ( (1.0 - (self.stage_cnt / self.num_stages)) ** self.T )
+    def prune_step(self, final_sparsity: float):
+        val =  final_sparsity - final_sparsity * ( (1.0 - (self.stage_cnt / self.num_stages)) ** self.opt['T'] )
         return val
 
-def pruner_factory(classname):
-    cls = globals()[classname]
-    return cls
+
+class RigL(PrunerBase):
+    r"""
+    https://arxiv.org/pdf/1911.11134.pdf
+    """
+    def __init__(self, opt : dict):
+        super().__init__(opt)
+
+    def prune_step(self, final_sparsity: float):
+        return final_sparsity
+    
+    def grow_step(self):
+        val =  self.opt['alpha'] * ( (1 + math.cos(self.stage_cnt * math.pi / self.num_stages)) / 2 )
+        return val
