@@ -88,10 +88,7 @@
             "model.23.m.0.cv1.conv": 0.8,
             "model.23.m.0.cv2.conv": 0.8,
             "model.23.m.1.cv1.conv": 0.8,
-            "model.23.m.1.cv2.conv": 0.8,
-            "model.24.m.0": 0.8,
-            "model.24.m.1": 0.8,
-            "model.24.m.2": 0.8           
+            "model.23.m.1.cv2.conv": 0.8      
         }
     }
 }
