@@ -128,13 +128,16 @@ class RigLImportance(ImportanceHook):
     def __init__(self, module: PrunableModule):
         super().__init__(module)
         self.hook = module.org_module.weight.register_hook(self.back_hook)
+        self.ema_alpha = 0.9
           
     def back_hook(self, grad):
-        new_growth = grad
-        new_growth[new_growth == float("Inf")] = 0
-        new_growth[new_growth == float("NaN")] = 0
-        self.growth += new_growth
+        # new_growth = grad
+        # new_growth[new_growth == float("Inf")] = 0
+        # new_growth[new_growth == float("NaN")] = 0
+        # self.growth += new_growth
+        self.growth = grad if (self.count == 0) else ( self.growth * (1 - self.ema_alpha) + grad * self.ema_alpha )
         self.count += 1
+
     
     def reset_growth(self):
         self.growth = torch.zeros_like(self.module.org_module.weight) 
@@ -144,7 +147,8 @@ class RigLImportance(ImportanceHook):
         return torch.abs( self.module.org_module.weight * self.module.mask )
 
     def get_growth(self):
-        return torch.abs( self.module.org_module.weight if (self.count == 0) else  self.growth / self.count ) * (self.module.mask == 0) 
+        # return torch.abs( self.module.org_module.weight if (self.count == 0) else (self.growth / self.count) ) * (self.module.mask == 0) 
+        return torch.abs( self.module.org_module.weight if (self.count == 0) else self.growth ) * (self.module.mask == 0) 
 
     def close(self):
         self.hook.remove()
