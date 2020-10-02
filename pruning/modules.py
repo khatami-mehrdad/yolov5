@@ -45,7 +45,9 @@ class PrunableModule(nn.Module):
 
     def or_mask(self, new_mask):
         self.mask += new_mask
-        self.mask[self.mask > 1] = 1
+        if ( torch.sum(self.mask > 1).item() > 0 ):
+            raise ValueError('mask cannot be more than 1')
+        
 
     def forward(self, input):
         pass

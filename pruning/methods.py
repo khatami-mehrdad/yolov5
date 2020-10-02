@@ -9,11 +9,14 @@ class ImportanceHook():
         self.reset_importance()
         self.reset_growth()
 
+    def set_mask(self, mask):
+        self.module.set_mask( mask )
+
     def apply_importance_thr(self, thr_val : float):
-        self.module.set_mask( self.compute_imp_mask(thr_val) )
+        self.set_mask( self.compute_imp_mask_thr(thr_val) )
 
     def apply_growth_thr(self, thr_val : float): # new mask is added to the old : or_mask
-        growth_mask = self.compute_growth_mask(thr_val)
+        growth_mask = self.compute_growth_mask_thr(thr_val)
         self.module.or_mask( growth_mask )
         with torch.no_grad():   # setting the weights of new growth to 0
             self.module.org_module.weight[growth_mask == 1] = 0 
@@ -24,18 +27,26 @@ class ImportanceHook():
     def get_growth_flat(self):
         return torch.flatten( self.get_growth() ) 
 
-    def compute_imp_mask(self, thr_val : float):
+    def compute_imp_mask_thr(self, thr_val : float):
         return torch.ge(self.get_importance(), thr_val).to(torch.int8)       
 
-    def compute_growth_mask(self, thr_val : float):
+    def compute_growth_mask_thr(self, thr_val : float):
         return torch.ge(self.get_growth(), thr_val).to(torch.int8)    
+
+    def compute_imp_mask(self, sparsity : float):
+        thr = self.compute_importance_thr(sparsity)
+        return self.compute_imp_mask_thr(thr)
+
+    def compute_growth_mask(self, growth : float):
+        thr = self.compute_growth_thr(growth)
+        return self.compute_growth_mask_thr(thr)
 
     def apply_sparsity(self, sparsity : float):
         thr = self.compute_importance_thr(sparsity)
         self.apply_importance_thr(thr)
 
-    def apply_growth(self, growth_perc : float):
-        thr = self.compute_growth_thr(growth_perc)
+    def apply_growth(self, growth : float):
+        thr = self.compute_growth_thr(growth)
         self.apply_growth_thr(thr)
 
     def compute_importance_thr(self, sparsity : float) :
