@@ -33,6 +33,9 @@ class DG_Pruner():
     def dump_importance_stat(self, output_dir : str = '', epoch : int = 0):
         prn.dump_importance_stat(self.hooks, output_dir, epoch)
 
+    def dump_growth_stat(self, output_dir : str = '', epoch : int = 0):
+        prn.dump_growth_stat(self.hooks, output_dir, epoch)
+
     @staticmethod
     def dump_sparsity_stat(model : nn.Module, output_dir : str = '', epoch : int = 0):
         prn.dump_sparsity_stat(model, output_dir, epoch)

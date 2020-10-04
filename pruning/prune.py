@@ -111,6 +111,13 @@ def get_importance_stat(hooks : dict):
         imp_dict[name] = torch.sum(h.get_importance() * h.module.mask).item() / torch.sum(h.module.mask).item()
     return imp_dict 
 
+def get_growth_stat(hooks : dict):
+    imp_dict = {}
+    for name, h in hooks.items():
+        if (torch.sum(h.module.mask == 0).item() > 0):
+            imp_dict[name] = torch.sum( h.get_growth() ).item() / torch.sum(h.module.mask == 0).item()
+    return imp_dict 
+
 def get_sparsity_stat(model : nn.Module, parent_name : str = ''):
     sparsity_dict = {}
     for child_name, child in model.named_children():
@@ -124,6 +131,10 @@ def get_sparsity_stat(model : nn.Module, parent_name : str = ''):
 def dump_importance_stat(hooks : dict, output_dir : str = '', epoch : int = 0):
     imp_dict = get_importance_stat(hooks)
     dump_json(imp_dict, 'importance_report_epoch{}.json'.format(epoch), output_dir)
+
+def dump_growth_stat(hooks : dict, output_dir : str = '', epoch : int = 0):
+    growth_dict = get_growth_stat(hooks)
+    dump_json(growth_dict, 'growth_report_epoch{}.json'.format(epoch), output_dir)
 
 def dump_sparsity_stat(model : nn.Module, output_dir : str = '', epoch : int = 0):
     sparsity_dict = get_sparsity_stat(model)

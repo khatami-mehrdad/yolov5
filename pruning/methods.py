@@ -150,5 +150,8 @@ class RigLImportance(ImportanceHook):
         # return torch.abs( self.module.org_module.weight if (self.count == 0) else (self.growth / self.count) ) * (self.module.mask == 0) 
         return torch.abs( self.module.org_module.weight if (self.count == 0) else self.growth ) * (self.module.mask == 0) 
 
+    def get_growth_no_mask(self):
+        return torch.abs( self.module.org_module.weight if (self.count == 0) else self.growth )
+
     def close(self):
         self.hook.remove()
