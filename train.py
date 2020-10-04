@@ -310,6 +310,7 @@ def train(hyp, opt, device, tb_writer=None):
                         # tb_writer.add_graph(model, imgs)  # add model to tensorboard
             # Mehrdad
             if ( opt.prune and ( (i % dgPruner.num_iter_per_update(nb) ) == 0) ):
+                dgPruner.dump_growth_stat(log_dir, epoch)
                 dgPruner.prune_n_reset( epoch + i / nb )
                 dgPruner.dump_sparsity_stat(model, log_dir, epoch)
             # end batch ------------------------------------------------------------------------------------------------
