@@ -93,6 +93,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
         model = Model(opt.cfg, ch=3, nc=nc).to(device)  # create
 
     # Mehrdad
+    from torch_utils import copy_attr
     from DG_Prune import DG_Pruner, TaylorImportance, MagnitudeImportance, RigLImportance
     
     if opt.prune:
