@@ -34,10 +34,6 @@ from utils.loss import compute_loss
 from utils.plots import plot_images, plot_labels, plot_results, plot_evolution
 from utils.torch_utils import ModelEMA, select_device, intersect_dicts, torch_distributed_zero_first
 
-# Mehrdad
-from pruning import DG_Pruner, TaylorImportance, MagnitudeImportance, RigLImportance
-#
-
 logger = logging.getLogger(__name__)
 
 try:
@@ -68,7 +64,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
     # Configure
     plots = not opt.evolve  # create plots
     cuda = device.type != 'cpu'
-    init_seeds(opt.seed + rank)
+    init_seeds(2 + rank)
     with open(opt.data) as f:
         data_dict = yaml.load(f, Loader=yaml.FullLoader)  # data dict
     with torch_distributed_zero_first(rank):
@@ -97,12 +93,14 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
         model = Model(opt.cfg, ch=3, nc=nc).to(device)  # create
 
     # Mehrdad
+    from DG_Prune import DG_Pruner, TaylorImportance, MagnitudeImportance, RigLImportance
+    
     if opt.prune:
         dgPruner = DG_Pruner()
         model = dgPruner.swap_prunable_modules(model)
-        dgPruner.dump_sparsity_stat(model, log_dir, 0)
-        pruners = dgPruner.pruners_from_file('pruning/rigl_yolov5m.json')
-        hooks = dgPruner.add_custom_pruning(model, RigLImportance)
+        dgPruner.dump_sparsity_stat(model, save_dir, 0)
+        pruners = dgPruner.pruners_from_file('DG_Prune/lth_yolov5m.json')
+        hooks = dgPruner.add_custom_pruning(model, MagnitudeImportance)
     #
 
     # Freeze
@@ -180,6 +178,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
     gs = int(max(model.stride))  # grid size (max stride)
     imgsz, imgsz_test = [check_img_size(x, gs) for x in opt.img_size]  # verify imgsz are gs-multiples
 
+    model_without_ddp = model
     # DP mode
     if cuda and rank == -1 and torch.cuda.device_count() > 1:
         model = torch.nn.DataParallel(model)
@@ -190,12 +189,13 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
         logger.info('Using SyncBatchNorm()')
 
     # EMA
-    ema = ModelEMA(model) if rank in [-1, 0] else None
+    if opt.EMA:
+        ema = ModelEMA(model) if rank in [-1, 0] else None
 
     # DDP mode
     if cuda and rank != -1:
         model = DDP(model, device_ids=[opt.local_rank], output_device=opt.local_rank)
-
+        model_without_ddp = model.module
     # Trainloader
     dataloader, dataset = create_dataloader(train_path, imgsz, batch_size, gs, opt,
                                             hyp=hyp, augment=True, cache=opt.cache_images, rect=opt.rect, rank=rank,
@@ -207,7 +207,8 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
 
     # Process 0
     if rank in [-1, 0]:
-        ema.updates = start_epoch * nb // accumulate  # set EMA updates
+        if opt.EMA:
+            ema.updates = start_epoch * nb // accumulate  # set EMA updates
         testloader = create_dataloader(test_path, imgsz_test, total_batch_size, gs, opt,  # testloader
                                        hyp=hyp, cache=opt.cache_images and not opt.notest, rect=True,
                                        rank=-1, world_size=opt.world_size, workers=opt.workers, pad=0.5)[0]
@@ -245,158 +246,166 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
     logger.info('Image sizes %g train, %g test\n'
                 'Using %g dataloader workers\nLogging results to %s\n'
                 'Starting training for %g epochs...' % (imgsz, imgsz_test, dataloader.num_workers, save_dir, epochs))
-    for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
-        model.train()
+    for lth_stage in range(0, dgPruner.num_stages() + 1):
+        if (lth_stage != 0):
+            checkpoint = dgPruner.rewind_masked_checkpoint()
+            model_without_ddp.load_state_dict(checkpoint['model'])
+            optimizer.load_state_dict(checkpoint['optimizer'])
+            start_epoch = checkpoint['epoch'] + 1
+            dgPruner.dump_sparsity_stat(model_without_ddp, save_dir, lth_stage * 10000)
 
-        # Update image weights (optional)
-        if opt.image_weights:
-            # Generate indices
-            if rank in [-1, 0]:
-                cw = model.class_weights.cpu().numpy() * (1 - maps) ** 2 / nc  # class weights
-                iw = labels_to_image_weights(dataset.labels, nc=nc, class_weights=cw)  # image weights
-                dataset.indices = random.choices(range(dataset.n), weights=iw, k=dataset.n)  # rand weighted idx
-            # Broadcast if DDP
-            if rank != -1:
-                indices = (torch.tensor(dataset.indices) if rank == 0 else torch.zeros(dataset.n)).int()
-                dist.broadcast(indices, 0)
-                if rank != 0:
-                    dataset.indices = indices.cpu().numpy()
+        for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
+            model.train()
 
-        # Update mosaic border
-        # b = int(random.uniform(0.25 * imgsz, 0.75 * imgsz + gs) // gs * gs)
-        # dataset.mosaic_border = [b - imgsz, -b]  # height, width borders
-
-        mloss = torch.zeros(4, device=device)  # mean losses
-        if rank != -1:
-            dataloader.sampler.set_epoch(epoch)
-        pbar = enumerate(dataloader)
-        logger.info(('\n' + '%10s' * 8) % ('Epoch', 'gpu_mem', 'box', 'obj', 'cls', 'total', 'targets', 'img_size'))
-        if rank in [-1, 0]:
-            pbar = tqdm(pbar, total=nb)  # progress bar
-        optimizer.zero_grad()
-        for i, (imgs, targets, paths, _) in pbar:  # batch -------------------------------------------------------------
-            ni = i + nb * epoch  # number integrated batches (since train start)
-            imgs = imgs.to(device, non_blocking=True).float() / 255.0  # uint8 to float32, 0-255 to 0.0-1.0
-
-            # Warmup
-            if ni <= nw:
-                xi = [0, nw]  # x interp
-                # model.gr = np.interp(ni, xi, [0.0, 1.0])  # iou loss ratio (obj_loss = 1.0 or iou)
-                accumulate = max(1, np.interp(ni, xi, [1, nbs / total_batch_size]).round())
-                for j, x in enumerate(optimizer.param_groups):
-                    # bias lr falls from 0.1 to lr0, all other lrs rise from 0.0 to lr0
-                    x['lr'] = np.interp(ni, xi, [hyp['warmup_bias_lr'] if j == 2 else 0.0, x['initial_lr'] * lf(epoch)])
-                    if 'momentum' in x:
-                        x['momentum'] = np.interp(ni, xi, [hyp['warmup_momentum'], hyp['momentum']])
-
-            # Multi-scale
-            if opt.multi_scale:
-                sz = random.randrange(imgsz * 0.5, imgsz * 1.5 + gs) // gs * gs  # size
-                sf = sz / max(imgs.shape[2:])  # scale factor
-                if sf != 1:
-                    ns = [math.ceil(x * sf / gs) * gs for x in imgs.shape[2:]]  # new shape (stretched to gs-multiple)
-                    imgs = F.interpolate(imgs, size=ns, mode='bilinear', align_corners=False)
-
-            # Forward
-            with amp.autocast(enabled=cuda):
-                pred = model(imgs)  # forward
-                loss, loss_items = compute_loss(pred, targets.to(device), model)  # loss scaled by batch_size
+            # Update image weights (optional)
+            if opt.image_weights:
+                # Generate indices
+                if rank in [-1, 0]:
+                    cw = model.class_weights.cpu().numpy() * (1 - maps) ** 2 / nc  # class weights
+                    iw = labels_to_image_weights(dataset.labels, nc=nc, class_weights=cw)  # image weights
+                    dataset.indices = random.choices(range(dataset.n), weights=iw, k=dataset.n)  # rand weighted idx
+                # Broadcast if DDP
                 if rank != -1:
-                    loss *= opt.world_size  # gradient averaged between devices in DDP mode
+                    indices = (torch.tensor(dataset.indices) if rank == 0 else torch.zeros(dataset.n)).int()
+                    dist.broadcast(indices, 0)
+                    if rank != 0:
+                        dataset.indices = indices.cpu().numpy()
 
-            # Backward
-            scaler.scale(loss).backward()
+            # Update mosaic border
+            # b = int(random.uniform(0.25 * imgsz, 0.75 * imgsz + gs) // gs * gs)
+            # dataset.mosaic_border = [b - imgsz, -b]  # height, width borders
 
-            # Optimize
-            if ni % accumulate == 0:
-                scaler.step(optimizer)  # optimizer.step
-                scaler.update()
-                optimizer.zero_grad()
-                if ema:
-                    ema.update(model)
-
-            # Print
+            mloss = torch.zeros(4, device=device)  # mean losses
+            if rank != -1:
+                dataloader.sampler.set_epoch(epoch)
+            pbar = enumerate(dataloader)
+            logger.info(('\n' + '%10s' * 8) % ('Epoch', 'gpu_mem', 'box', 'obj', 'cls', 'total', 'targets', 'img_size'))
             if rank in [-1, 0]:
-                mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
-                mem = '%.3gG' % (torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0)  # (GB)
-                s = ('%10s' * 2 + '%10.4g' * 6) % (
-                    '%g/%g' % (epoch, epochs - 1), mem, *mloss, targets.shape[0], imgs.shape[-1])
-                pbar.set_description(s)
+                pbar = tqdm(pbar, total=nb)  # progress bar
+            optimizer.zero_grad()
+            for i, (imgs, targets, paths, _) in pbar:  # batch -------------------------------------------------------------
+                ni = i + nb * epoch  # number integrated batches (since train start)
+                imgs = imgs.to(device, non_blocking=True).float() / 255.0  # uint8 to float32, 0-255 to 0.0-1.0
 
-                # Plot
-                if plots and ni < 3:
-                    f = save_dir / f'train_batch{ni}.jpg'  # filename
-                    Thread(target=plot_images, args=(imgs, targets, paths, f), daemon=True).start()
-                    # if tb_writer:
-                    #     tb_writer.add_image(f, result, dataformats='HWC', global_step=epoch)
-                    #     tb_writer.add_graph(model, imgs)  # add model to tensorboard
-                elif plots and ni == 3 and wandb:
-                    wandb.log({"Mosaics": [wandb.Image(str(x), caption=x.name) for x in save_dir.glob('train*.jpg')]})
+                # Warmup
+                if ni <= nw:
+                    xi = [0, nw]  # x interp
+                    # model.gr = np.interp(ni, xi, [0.0, 1.0])  # iou loss ratio (obj_loss = 1.0 or iou)
+                    accumulate = max(1, np.interp(ni, xi, [1, nbs / total_batch_size]).round())
+                    for j, x in enumerate(optimizer.param_groups):
+                        # bias lr falls from 0.1 to lr0, all other lrs rise from 0.0 to lr0
+                        x['lr'] = np.interp(ni, xi, [hyp['warmup_bias_lr'] if j == 2 else 0.0, x['initial_lr'] * lf(epoch)])
+                        if 'momentum' in x:
+                            x['momentum'] = np.interp(ni, xi, [hyp['warmup_momentum'], hyp['momentum']])
 
-            # end batch ------------------------------------------------------------------------------------------------
-        # end epoch ----------------------------------------------------------------------------------------------------
+                # Multi-scale
+                if opt.multi_scale:
+                    sz = random.randrange(imgsz * 0.5, imgsz * 1.5 + gs) // gs * gs  # size
+                    sf = sz / max(imgs.shape[2:])  # scale factor
+                    if sf != 1:
+                        ns = [math.ceil(x * sf / gs) * gs for x in imgs.shape[2:]]  # new shape (stretched to gs-multiple)
+                        imgs = F.interpolate(imgs, size=ns, mode='bilinear', align_corners=False)
 
-        # Scheduler
-        lr = [x['lr'] for x in optimizer.param_groups]  # for tensorboard
-        scheduler.step()
+                # Forward
+                with amp.autocast(enabled=cuda):
+                    pred = model(imgs)  # forward
+                    loss, loss_items = compute_loss(pred, targets.to(device), model)  # loss scaled by batch_size
+                    if rank != -1:
+                        loss *= opt.world_size  # gradient averaged between devices in DDP mode
 
-        # DDP process 0 or single-GPU
-        if rank in [-1, 0]:
-            # mAP
-            if ema:
-                ema.update_attr(model, include=['yaml', 'nc', 'hyp', 'gr', 'names', 'stride', 'class_weights'])
-            final_epoch = epoch + 1 == epochs
-            if not opt.notest or final_epoch:  # Calculate mAP
-                results, maps, times = test.test(opt.data,
-                                                 batch_size=total_batch_size,
-                                                 imgsz=imgsz_test,
-                                                 model=ema.ema,
-                                                 single_cls=opt.single_cls,
-                                                 dataloader=testloader,
-                                                 save_dir=save_dir,
-                                                 plots=plots and final_epoch,
-                                                 log_imgs=opt.log_imgs if wandb else 0)
+                # Backward
+                scaler.scale(loss).backward()
 
-            # Write
-            with open(results_file, 'a') as f:
-                f.write(s + '%10.4g' * 7 % results + '\n')  # P, R, mAP@.5, mAP@.5-.95, val_loss(box, obj, cls)
-            if len(opt.name) and opt.bucket:
-                os.system('gsutil cp %s gs://%s/results/results%s.txt' % (results_file, opt.bucket, opt.name))
+                # Optimize
+                if ni % accumulate == 0:
+                    scaler.step(optimizer)  # optimizer.step
+                    scaler.update()
+                    optimizer.zero_grad()
+                    if opt.EMA:
+                        ema.update(model)
 
-            # Log
-            tags = ['train/box_loss', 'train/obj_loss', 'train/cls_loss',  # train loss
-                    'metrics/precision', 'metrics/recall', 'metrics/mAP_0.5', 'metrics/mAP_0.5:0.95',
-                    'val/box_loss', 'val/obj_loss', 'val/cls_loss',  # val loss
-                    'x/lr0', 'x/lr1', 'x/lr2']  # params
-            for x, tag in zip(list(mloss[:-1]) + list(results) + lr, tags):
-                if tb_writer:
-                    tb_writer.add_scalar(tag, x, epoch)  # tensorboard
-                if wandb:
-                    wandb.log({tag: x})  # W&B
+                # Print
+                if rank in [-1, 0]:
+                    mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
+                    mem = '%.3gG' % (torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0)  # (GB)
+                    s = ('%10s' * 2 + '%10.4g' * 6) % (
+                        '%g/%g' % (epoch, epochs - 1), mem, *mloss, targets.shape[0], imgs.shape[-1])
+                    pbar.set_description(s)
 
-            # Update best mAP
-            fi = fitness(np.array(results).reshape(1, -1))  # weighted combination of [P, R, mAP@.5, mAP@.5-.95]
-            if fi > best_fitness:
-                best_fitness = fi
+                    # Plot
+                    if plots and ni < 3:
+                        f = save_dir / f'train_batch{ni}.jpg'  # filename
+                        Thread(target=plot_images, args=(imgs, targets, paths, f), daemon=True).start()
+                        # if tb_writer:
+                        #     tb_writer.add_image(f, result, dataformats='HWC', global_step=epoch)
+                        #     tb_writer.add_graph(model, imgs)  # add model to tensorboard
+                    elif plots and ni == 3 and wandb:
+                        wandb.log({"Mosaics": [wandb.Image(str(x), caption=x.name) for x in save_dir.glob('train*.jpg')]})
 
-            # Save model
-            save = (not opt.nosave) or (final_epoch and not opt.evolve)
-            if save:
-                with open(results_file, 'r') as f:  # create checkpoint
-                    ckpt = {'epoch': epoch,
-                            'best_fitness': best_fitness,
-                            'training_results': f.read(),
-                            'model': ema.ema,
-                            'optimizer': None if final_epoch else optimizer.state_dict(),
-                            'wandb_id': wandb_run.id if wandb else None}
+                # end batch ------------------------------------------------------------------------------------------------
+            # end epoch ----------------------------------------------------------------------------------------------------
 
-                # Save last, best and delete
-                torch.save(ckpt, last)
-                if best_fitness == fi:
-                    torch.save(ckpt, best)
-                del ckpt
-        # end epoch ----------------------------------------------------------------------------------------------------
-    # end training
+            # Scheduler
+            lr = [x['lr'] for x in optimizer.param_groups]  # for tensorboard
+            scheduler.step()
+
+            # DDP process 0 or single-GPU
+            if rank in [-1, 0]:
+                # mAP
+                if opt.EMA:
+                    ema.update_attr(model, include=['yaml', 'nc', 'hyp', 'gr', 'names', 'stride', 'class_weights'])
+                final_epoch = epoch + 1 == epochs
+                if not opt.notest or final_epoch:  # Calculate mAP
+                    results, maps, times = test.test(opt.data,
+                                                    batch_size=total_batch_size,
+                                                    imgsz=imgsz_test,
+                                                    model=ema.ema if ema else model_without_ddp,
+                                                    single_cls=opt.single_cls,
+                                                    dataloader=testloader,
+                                                    save_dir=save_dir,
+                                                    plots=plots and final_epoch,
+                                                    log_imgs=opt.log_imgs if wandb else 0)
+
+                # Write
+                with open(results_file, 'a') as f:
+                    f.write(s + '%10.4g' * 7 % results + '\n')  # P, R, mAP@.5, mAP@.5-.95, val_loss(box, obj, cls)
+                if len(opt.name) and opt.bucket:
+                    os.system('gsutil cp %s gs://%s/results/results%s.txt' % (results_file, opt.bucket, opt.name))
+
+                # Log
+                tags = ['train/box_loss', 'train/obj_loss', 'train/cls_loss',  # train loss
+                        'metrics/precision', 'metrics/recall', 'metrics/mAP_0.5', 'metrics/mAP_0.5:0.95',
+                        'val/box_loss', 'val/obj_loss', 'val/cls_loss',  # val loss
+                        'x/lr0', 'x/lr1', 'x/lr2']  # params
+                for x, tag in zip(list(mloss[:-1]) + list(results) + lr, tags):
+                    if tb_writer:
+                        tb_writer.add_scalar(tag, x, epoch)  # tensorboard
+                    if wandb:
+                        wandb.log({tag: x})  # W&B
+
+                # Update best mAP
+                fi = fitness(np.array(results).reshape(1, -1))  # weighted combination of [P, R, mAP@.5, mAP@.5-.95]
+                if fi > best_fitness:
+                    best_fitness = fi
+
+                # Save model
+                save = (not opt.nosave) or (final_epoch and not opt.evolve)
+                if save:
+                    with open(results_file, 'r') as f:  # create checkpoint
+                        ckpt = {'epoch': epoch,
+                                'best_fitness': best_fitness,
+                                'training_results': f.read(),
+                                'model': ema.ema if opt.EMA else model_without_ddp,
+                                'optimizer': None if final_epoch else optimizer.state_dict(),
+                                'wandb_id': wandb_run.id if wandb else None}
+
+                    # Save last, best and delete
+                    torch.save(ckpt, last)
+                    if best_fitness == fi:
+                        torch.save(ckpt, best)
+                    del ckpt
+            # end epoch ----------------------------------------------------------------------------------------------------
+        # end training
 
     if rank in [-1, 0]:
         # Strip optimizers
@@ -471,6 +480,7 @@ if __name__ == '__main__':
     parser.add_argument('--project', default='runs/train', help='save to project/name')
     parser.add_argument('--name', default='exp', help='save to project/name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
+    parser.add_argument('--EMA', action='store_true', help='Model EMA')
     
     parser.add_argument('--prune', action='store_true', help='use pruning')
 
@@ -608,4 +618,3 @@ if __name__ == '__main__':
         plot_evolution(yaml_file)
         print(f'Hyperparameter evolution complete. Best results saved as: {yaml_file}\n'
               f'Command to train a new model with these hyperparameters: $ python train.py --hyp {yaml_file}')
-              
