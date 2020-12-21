@@ -401,8 +401,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
                         dgPruner.apply_mask_to_weight()
                     checkpoint = {  'epoch': epoch,
                                     'best_fitness': best_fitness,
-                                    'training_results': f.read(),
-                                    'model': ema.ema if opt.EMA else model_without_ddp,
+                                    'model': ema.ema.state_dict() if opt.EMA else model_without_ddp.state_dict(),
                                     'optimizer': optimizer.state_dict(),
                                     'wandb_id': wandb_run.id if wandb else None
                                 }
