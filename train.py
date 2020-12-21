@@ -408,7 +408,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
                     if best_fitness == fi:
                         torch.save(ckpt, best)
                     del ckpt
-                    
+
             # Mehrdad: LTH, pruning in the end
             if (opt.prune):
                 if (final_epoch):
@@ -425,7 +425,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
                 if (lth_stage == 0) and (epoch == dgPruner.rewind_epoch(epochs)):
                     logger.info('save rewind checkpoint\n')
                     dgPruner.save_rewind_checkpoint(checkpoint)
-                if (final_epoch):
+                if (epoch + 1 == epochs):
                     logger.info('save final checkpoint\n')
                     dgPruner.save_final_checkpoint(checkpoint)
 
