@@ -401,16 +401,17 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
                         dgPruner.apply_mask_to_weight()
                     checkpoint = {  'epoch': epoch,
                                     'best_fitness': best_fitness,
-                                    'model': ema.ema.state_dict() if opt.EMA else model_without_ddp.state_dict(),
+                                    'model': ema.ema.state_dict() if ema else model_without_ddp.state_dict(),
                                     'optimizer': optimizer.state_dict(),
                                     'wandb_id': wandb_run.id if wandb else None
                                 }
-                    
-                # Save checkpoints
-                if (lth_stage == 0) and (epoch == dgPruner.rewind_epoch(epochs)):
-                    dgPruner.save_rewind_checkpoint(checkpoint)
-                if (final_epoch):
-                    dgPruner.save_final_checkpoint(checkpoint)
+                    # Save checkpoints
+                    if (lth_stage == 0) and (epoch == dgPruner.rewind_epoch(epochs)):
+                        logger.info('save rewind checkpoint\n')
+                        dgPruner.save_rewind_checkpoint(checkpoint)
+                    if (final_epoch):
+                        logger.info('save final checkpoint\n')
+                        dgPruner.save_final_checkpoint(checkpoint)
 
 
                 save = (not opt.nosave) or (final_epoch and not opt.evolve)
