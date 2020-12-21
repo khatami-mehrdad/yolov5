@@ -248,7 +248,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
                 'Starting training for %g epochs...' % (imgsz, imgsz_test, dataloader.num_workers, save_dir, epochs))
     for lth_stage in range(0, dgPruner.num_stages() + 1):
         if (lth_stage != 0):
-            checkpoint = dgPruner.rewind_masked_checkpoint()
+            checkpoint = dgPruner.rewind_masked_checkpoint('model')
             model_without_ddp.load_state_dict(checkpoint['model'])
             optimizer.load_state_dict(checkpoint['optimizer'])
             start_epoch = checkpoint['epoch'] + 1
@@ -342,7 +342,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
                     elif plots and ni == 3 and wandb:
                         wandb.log({"Mosaics": [wandb.Image(str(x), caption=x.name) for x in save_dir.glob('train*.jpg')]})
 
-                # end batch ------------------------------------------------------------------------------------------------
+                # end batch ------------------------------------------------------------------------------------------------     
             # end epoch ----------------------------------------------------------------------------------------------------
 
             # Scheduler
@@ -389,6 +389,27 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
                     best_fitness = fi
 
                 # Save model
+                # Mehrdad: LTH, pruning in the end
+                if (opt.prune):
+                    if (final_epoch):
+                        dgPruner.prune_n_reset( epoch )
+                        dgPruner.dump_sparsity_stat(model, save_dir, epoch)
+                        dgPruner.apply_mask_to_weight()
+                    checkpoint = {  'epoch': epoch,
+                                    'best_fitness': best_fitness,
+                                    'training_results': f.read(),
+                                    'model': ema.ema if opt.EMA else model_without_ddp,
+                                    'optimizer': optimizer.state_dict(),
+                                    'wandb_id': wandb_run.id if wandb else None
+                                }
+                    
+                # Save checkpoints
+                if (lth_stage == 0) and (epoch == dgPruner.rewind_epoch(epochs)):
+                    dgPruner.save_rewind_checkpoint(checkpoint)
+                if (final_epoch):
+                    dgPruner.save_final_checkpoint(checkpoint)
+
+
                 save = (not opt.nosave) or (final_epoch and not opt.evolve)
                 if save:
                     with open(results_file, 'r') as f:  # create checkpoint
