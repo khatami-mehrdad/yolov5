@@ -393,27 +393,6 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
                     best_fitness = fi
 
                 # Save model
-                # Mehrdad: LTH, pruning in the end
-                if (opt.prune):
-                    if (final_epoch):
-                        dgPruner.prune_n_reset( epoch )
-                        dgPruner.dump_sparsity_stat(model, save_dir, epoch)
-                        dgPruner.apply_mask_to_weight()
-                    checkpoint = {  'epoch': epoch,
-                                    'best_fitness': best_fitness,
-                                    'model': ema.ema.state_dict() if ema else model_without_ddp.state_dict(),
-                                    'optimizer': optimizer.state_dict(),
-                                    'wandb_id': wandb_run.id if wandb else None
-                                }
-                    # Save checkpoints
-                    if (lth_stage == 0) and (epoch == dgPruner.rewind_epoch(epochs)):
-                        logger.info('save rewind checkpoint\n')
-                        dgPruner.save_rewind_checkpoint(checkpoint)
-                    if (final_epoch):
-                        logger.info('save final checkpoint\n')
-                        dgPruner.save_final_checkpoint(checkpoint)
-
-
                 save = (not opt.nosave) or (final_epoch and not opt.evolve)
                 if save:
                     with open(results_file, 'r') as f:  # create checkpoint
@@ -429,6 +408,27 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
                     if best_fitness == fi:
                         torch.save(ckpt, best)
                     del ckpt
+                    
+            # Mehrdad: LTH, pruning in the end
+            if (opt.prune):
+                if (final_epoch):
+                    dgPruner.prune_n_reset( epoch )
+                    dgPruner.dump_sparsity_stat(model, save_dir, epoch)
+                    dgPruner.apply_mask_to_weight()
+                checkpoint = {  'epoch': epoch,
+                                'best_fitness': best_fitness,
+                                'model': model_without_ddp.state_dict(),
+                                'optimizer': optimizer.state_dict(),
+                                'wandb_id': wandb_run.id if wandb else None
+                            }
+                # Save checkpoints
+                if (lth_stage == 0) and (epoch == dgPruner.rewind_epoch(epochs)):
+                    logger.info('save rewind checkpoint\n')
+                    dgPruner.save_rewind_checkpoint(checkpoint)
+                if (final_epoch):
+                    logger.info('save final checkpoint\n')
+                    dgPruner.save_final_checkpoint(checkpoint)
+
             # end epoch ----------------------------------------------------------------------------------------------------
         # end training
 
