@@ -20,6 +20,9 @@
 *.data
 *.json
 
+!launch.json
+
+
 *.cfg
 !cfg/yolov3*.cfg
 
