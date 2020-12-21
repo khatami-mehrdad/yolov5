@@ -468,11 +468,12 @@ if __name__ == '__main__':
     parser.add_argument('--log-imgs', type=int, default=16, help='number of images for W&B logging, max 100')
     parser.add_argument('--log-artifacts', action='store_true', help='log artifacts, i.e. final trained model')
     parser.add_argument('--workers', type=int, default=8, help='maximum number of dataloader workers')
-    parser.add_argument('--prune', action='store_true', help='use pruning')
-    parser.add_argument('--seed', type=int, default=2, metavar='S', help='random seed (default: 2: yolov5 repo)')    
     parser.add_argument('--project', default='runs/train', help='save to project/name')
     parser.add_argument('--name', default='exp', help='save to project/name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
+    
+    parser.add_argument('--prune', action='store_true', help='use pruning')
+
     opt = parser.parse_args()
 
     # Set DDP variables
@@ -607,3 +608,4 @@ if __name__ == '__main__':
         plot_evolution(yaml_file)
         print(f'Hyperparameter evolution complete. Best results saved as: {yaml_file}\n'
               f'Command to train a new model with these hyperparameters: $ python train.py --hyp {yaml_file}')
+              
