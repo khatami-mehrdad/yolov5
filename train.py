@@ -411,7 +411,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
 
             # Mehrdad: LTH, pruning in the end
             if (opt.prune):
-                if (final_epoch):
+                if (epoch + 1 == epochs):
                     dgPruner.prune_n_reset( epoch )
                     dgPruner.dump_sparsity_stat(model, save_dir, epoch)
                     dgPruner.apply_mask_to_weight()
