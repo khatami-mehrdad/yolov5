@@ -368,7 +368,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
                     results, maps, times = test.test(opt.data,
                                                     batch_size=total_batch_size,
                                                     imgsz=imgsz_test,
-                                                    model=ema.ema if ema else model_without_ddp,
+                                                    model=ema.ema if opt.EMA else model_without_ddp,
                                                     single_cls=opt.single_cls,
                                                     dataloader=testloader,
                                                     save_dir=save_dir,
