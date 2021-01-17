@@ -86,7 +86,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
         model = Model(opt.cfg, ch=3, nc=nc).to(device)  # create
 
     # Mehrdad
-    from torch_utils import copy_attr
+    from utils.torch_utils import copy_attr
     from DG_Prune import DG_Pruner, TaylorImportance, MagnitudeImportance, RigLImportance
     
     if opt.prune:
@@ -242,12 +242,13 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
     results = (0, 0, 0, 0, 0, 0, 0)  # P, R, mAP@.5, mAP@.5-.95, val_loss(box, obj, cls)
     scheduler.last_epoch = start_epoch - 1  # do not move
     scaler = amp.GradScaler(enabled=cuda)
-
     compute_loss = ComputeLoss(model)  # init loss class
     logger.info(f'Image sizes {imgsz} train, {imgsz_test} test\n'
                 f'Using {dataloader.num_workers} dataloader workers\n'
                 f'Logging results to {save_dir}\n'
                 f'Starting training for {epochs} epochs...')
+
+    # Mehrdad
     for lth_stage in range(0, dgPruner.num_stages() + 1):
         if (lth_stage != 0):
             checkpoint = dgPruner.rewind_masked_checkpoint('model')
@@ -255,7 +256,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
             optimizer.load_state_dict(checkpoint['optimizer'])
             start_epoch = checkpoint['epoch'] + 1
             dgPruner.dump_sparsity_stat(model_without_ddp, save_dir, lth_stage * 10000)
-
+    # 
         for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
             model.train()
 
@@ -272,7 +273,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
                     dist.broadcast(indices, 0)
                     if rank != 0:
                         dataset.indices = indices.cpu().numpy()
-                        
+
             # Update mosaic border
             # b = int(random.uniform(0.25 * imgsz, 0.75 * imgsz + gs) // gs * gs)
             # dataset.mosaic_border = [b - imgsz, -b]  # height, width borders
@@ -343,10 +344,11 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
                         # if tb_writer:
                         #     tb_writer.add_image(f, result, dataformats='HWC', global_step=epoch)
                         #     tb_writer.add_graph(model, imgs)  # add model to tensorboard
-                    elif plots and ni == 3 and wandb:
-                        wandb.log({"Mosaics": [wandb.Image(str(x), caption=x.name) for x in save_dir.glob('train*.jpg')]})
+                    elif plots and ni == 10 and wandb:
+                        wandb.log({"Mosaics": [wandb.Image(str(x), caption=x.name) for x in save_dir.glob('train*.jpg')
+                                            if x.exists()]})
 
-                # end batch ------------------------------------------------------------------------------------------------     
+                # end batch ------------------------------------------------------------------------------------------------
             # end epoch ----------------------------------------------------------------------------------------------------
 
             # Scheduler
@@ -371,7 +373,8 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
                                                     dataloader=testloader,
                                                     save_dir=save_dir,
                                                     plots=plots and final_epoch,
-                                                    log_imgs=opt.log_imgs if wandb else 0)
+                                                    log_imgs=opt.log_imgs if wandb else 0,
+                                                    compute_loss=compute_loss)
 
                 # Write
                 with open(results_file, 'a') as f:
@@ -411,7 +414,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
                     if best_fitness == fi:
                         torch.save(ckpt, best)
                     del ckpt
-
+            
             # Mehrdad: LTH, pruning in the end
             if (opt.prune):
                 if (epoch + 1 == epochs):
@@ -508,9 +511,9 @@ if __name__ == '__main__':
     parser.add_argument('--project', default='runs/train', help='save to project/name')
     parser.add_argument('--name', default='exp', help='save to project/name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
+    parser.add_argument('--quad', action='store_true', help='quad dataloader')
     parser.add_argument('--EMA', action='store_true', help='Model EMA')
     parser.add_argument('--prune', action='store_true', help='use pruning')
-    parser.add_argument('--quad', action='store_true', help='quad dataloader')
     opt = parser.parse_args()
 
     # Set DDP variables
