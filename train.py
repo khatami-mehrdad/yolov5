@@ -59,7 +59,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
     cuda = device.type != 'cpu'
     init_seeds(2 + rank)
     with open(opt.data) as f:
-        data_dict = yaml.load(f, Loader=yaml.FullLoader)  # data dict
+        data_dict = yaml.load(f, Loader=yaml.SafeLoader)  # data dict
     with torch_distributed_zero_first(rank):
         check_dataset(data_dict)  # check
     train_path = data_dict['train']
@@ -185,8 +185,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
         logger.info('Using SyncBatchNorm()')
 
     # EMA
-    if opt.EMA:
-        ema = ModelEMA(model, decay=0) if rank in [-1, 0] else None
+    ema = ModelEMA(model, decay=0) if rank in [-1, 0] else None
 
     # DDP mode
     if cuda and rank != -1:
@@ -203,8 +202,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
 
     # Process 0
     if rank in [-1, 0]:
-        if opt.EMA:
-            ema.updates = start_epoch * nb // accumulate  # set EMA updates
+        ema.updates = start_epoch * nb // accumulate  # set EMA updates
         testloader = create_dataloader(test_path, imgsz_test, total_batch_size, gs, opt,  # testloader
                                        hyp=hyp, cache=opt.cache_images and not opt.notest, rect=True, rank=-1,
                                        world_size=opt.world_size, workers=opt.workers,
@@ -326,7 +324,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
                     scaler.step(optimizer)  # optimizer.step
                     scaler.update()
                     optimizer.zero_grad()
-                    if opt.EMA:
+                    if ema:
                         ema.update(model)
 
                 # Print
@@ -358,17 +356,14 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
             # DDP process 0 or single-GPU
             if rank in [-1, 0]:
                 # mAP
-                if opt.EMA:
+                if ema:
                     ema.update_attr(model, include=['yaml', 'nc', 'hyp', 'gr', 'names', 'stride', 'class_weights'])
-                else:
-                    copy_attr(model_without_ddp, model, include=['yaml', 'nc', 'hyp', 'gr', 'names', 'stride', 'class_weights'], exclude=('process_group', 'reducer'))
-
                 final_epoch = epoch + 1 == epochs
                 if not opt.notest or final_epoch:  # Calculate mAP
                     results, maps, times = test.test(opt.data,
                                                     batch_size=total_batch_size,
                                                     imgsz=imgsz_test,
-                                                    model=ema.ema if opt.EMA else model_without_ddp,
+                                                    model=ema.ema,
                                                     single_cls=opt.single_cls,
                                                     dataloader=testloader,
                                                     save_dir=save_dir,
@@ -405,7 +400,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
                         ckpt = {'epoch': epoch,
                                 'best_fitness': best_fitness,
                                 'training_results': f.read(),
-                                'model': ema.ema if opt.EMA else model_without_ddp,
+                                'model': ema.ema,
                                 'optimizer': None if final_epoch else optimizer.state_dict(),
                                 'wandb_id': wandb_run.id if wandb else None}
 
@@ -414,7 +409,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
                     if best_fitness == fi:
                         torch.save(ckpt, best)
                     del ckpt
-            
+                    
             # Mehrdad: LTH, pruning in the end
             if (opt.prune):
                 if (epoch + 1 == epochs):
@@ -435,8 +430,8 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
                     logger.info('save final checkpoint\n')
                     dgPruner.save_final_checkpoint(checkpoint)
 
-            # end epoch ----------------------------------------------------------------------------------------------------
-        # end training
+        # end epoch ----------------------------------------------------------------------------------------------------
+    # end training
 
     if rank in [-1, 0]:
         # Strip optimizers
@@ -512,7 +507,6 @@ if __name__ == '__main__':
     parser.add_argument('--name', default='exp', help='save to project/name')
     parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
     parser.add_argument('--quad', action='store_true', help='quad dataloader')
-    parser.add_argument('--EMA', action='store_true', help='Model EMA')
     parser.add_argument('--prune', action='store_true', help='use pruning')
     opt = parser.parse_args()
 
@@ -530,7 +524,7 @@ if __name__ == '__main__':
         assert os.path.isfile(ckpt), 'ERROR: --resume checkpoint does not exist'
         apriori = opt.global_rank, opt.local_rank
         with open(Path(ckpt).parent.parent / 'opt.yaml') as f:
-            opt = argparse.Namespace(**yaml.load(f, Loader=yaml.FullLoader))  # replace
+            opt = argparse.Namespace(**yaml.load(f, Loader=yaml.SafeLoader))  # replace
         opt.cfg, opt.weights, opt.resume, opt.batch_size, opt.global_rank, opt.local_rank = '', ckpt, True, opt.total_batch_size, *apriori  # reinstate
         logger.info('Resuming training from %s' % ckpt)
     else:
@@ -554,7 +548,7 @@ if __name__ == '__main__':
 
     # Hyperparameters
     with open(opt.hyp) as f:
-        hyp = yaml.load(f, Loader=yaml.FullLoader)  # load hyps
+        hyp = yaml.load(f, Loader=yaml.SafeLoader)  # load hyps
 
     # Train
     logger.info(opt)
