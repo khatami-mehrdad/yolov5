@@ -400,7 +400,7 @@ def train(hyp, opt, device, tb_writer=None, wandb=None):
                         ckpt = {'epoch': epoch,
                                 'best_fitness': best_fitness,
                                 'training_results': f.read(),
-                                'model': ema.ema,
+                                'model': dgPruner.strip_prunable_modules( ema.ema ),
                                 'optimizer': None if final_epoch else optimizer.state_dict(),
                                 'wandb_id': wandb_run.id if wandb else None}
 
